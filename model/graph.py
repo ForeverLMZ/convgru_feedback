@@ -47,10 +47,9 @@ class Graph(object):
         for input_node in self.input_node_indices:
             self.rank_node(self.nodes[input_node],self.nodes[self.output_node_index], 0, 0)
 
-        # for node in range (self.num_node):
-            
-        #     print(self.nodes[node].rank_list)
-
+        for node in range (self.num_node):
+            if len(self.nodes[node].rank_list) > 1 :
+                self.nodes[node].rank_list.remove(-1)
 
 
     def generate_node_list(self,conn_strength):
@@ -206,16 +205,18 @@ class Architecture(nn.Module):
             hidden_state_prev = self._init_hidden(batch_size=batch_size) #hidden_state_prev shape [n,b,c,h,w]
             hidden_state_cur = self._init_hidden(batch_size=batch_size)
             #for t in range(max(seq_len, self.graph.max_rank)):  #contains error
-            for t in range(self.time):
+            time_counter = 0
+            for t in range(10): #non serial modification
                 #before permute: b c t h w
                 #TODO: error checks if input signal time series is longer than self.time
                 current_inputs = [] #same shape and order as self.graph.input_node_indices # shape [n,b,c,h,w]
-                for inp in range(num_inputs):
-                    if (t < self.graph.signal_length):
+                if (t % 3 == 0 and t != 9):# non serial modification                    
+                    for inp in range(num_inputs):
+                        #self.graph.signal_length):
                     #current_inputs.append(self.input_conv_list[input](input_tensor_list[input][:, t, :, :, :]))
-                        current_inputs.append(self.input_conv_list[inp](input_tensor_list[inp][:, t, :, :, :]))
+                        current_inputs.append(self.input_conv_list[inp](input_tensor_list[inp][:, time_counter, :, :, :]))
+                    time_counter = time_counter + 1
                 #current_input = self.input_conv(input_tensor[:, :, :, :])#[32,1,28,28]
-
                 for node in range(self.graph.num_node):
                     #print('currently:','rep: ',rep,' t ',t,' node ',node)
                     bottomup_has_info = False
@@ -226,7 +227,8 @@ class Architecture(nn.Module):
                     # Bottom-up signal is either the state from the bottom layer or the input signal if it's the bottom-most layer
                     
                     #record direct input signal at the given time step
-                    if node in self.graph.input_node_indices and t < self.graph.signal_length: #assumes signal input starts from t0
+                    #if node in self.graph.input_node_indices and (t < self.graph.signal_length): #assumes signal input starts from t0
+                    if node in self.graph.input_node_indices and (t % 3 == 0 and t!= 9): #non serial modification
                         bottomup =  current_inputs[self.graph.input_node_indices.index(node)] #assumes the input node indices and the input signal indices matches in order e.g.: first input node receives first input signal
                         if (1 == self.graph.input_node_indices.index(node)): #if input signal is the topdown input signal, then use linear projection layer to reshape
                             bottomup = self.topdown_input_proj(torch.flatten(bottomup,start_dim=1))
@@ -278,11 +280,13 @@ class Architecture(nn.Module):
                     
                     #Update hidden state of this layer by feeding bottom-up, top-down and current cell state into gru cell
                     if (bottomup_has_info == False):
-                        bottomup = torch.zeros(hidden_state_prev[i].shape[0], 1, self.graph.nodes[node].input_height, self.graph.nodes[node].input_width).to('cuda')
+                        if (node == 3):
+                            bottomup = torch.zeros(hidden_state_prev[i].shape[0], 10, self.graph.nodes[node].input_height, self.graph.nodes[node].input_width).to('cuda')
+                        else:
+                            bottomup = torch.zeros(hidden_state_prev[i].shape[0], 1, self.graph.nodes[node].input_height, self.graph.nodes[node].input_width).to('cuda')
                     else:
                         bottomup = self.bottomup_gru_list[node](torch.flatten(bottomup,start_dim=1)) 
                         bottomup = torch.reshape(bottomup, (bottomup.shape[0],self.graph.nodes[node].input_dim, self.graph.nodes[node].input_height, self.graph.nodes[node].input_width))
-                    
                     h = self.cell_list[node](input_tensor=bottomup, h_cur=node_hidden_state, topdown=mod_sig)
 
 
