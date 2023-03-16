@@ -7,6 +7,7 @@ import math
 import pickle
 import argparse
 
+
 from scipy.special import softmax
 from torch import nn
 from torchvision import datasets
@@ -15,9 +16,10 @@ from torch.autograd import Variable
 from torch import optim
 import torch.nn.functional as F
 import torchvision.transforms as T
+
 from utils.datagen import *
-from model.graph import Graph
-from model.topdown_gru import ConvGRUExplicitTopDown
+from model.newGraph import Graph, Architecture
+
 
 def str2bool(v):
     if v.lower() in ('yes', 'true', 't', 'y', '1'):
@@ -30,7 +32,7 @@ def str2bool(v):
 parser = argparse.ArgumentParser()
 
 parser.add_argument('--cuda', type = bool, default = True, help = 'use gpu or not')
-parser.add_argument('--epochs', type = int, default = 10)
+parser.add_argument('--epochs', type = int, default = 50)
 parser.add_argument('--layers', type = int, default = 1)
 parser.add_argument('--topdown_c', type = int, default = 10)
 parser.add_argument('--topdown_h', type = int, default = 10)
@@ -46,7 +48,6 @@ parser.add_argument('--results_save', type = str, default = 'results/no_topdown_
 
 args = vars(parser.parse_args())
 
-
 # %%
 # Use GPU if available
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -57,8 +58,8 @@ print(device)
 # # 1: Prepare dataset
 print('Loading datasets')
 
-MNIST_path='D:\LiNC research\data'
-save_path = 'D:/LiNC research/saved_models/image_topdown.pt'
+
+MNIST_path='/home/mila/m/mashbayar.tugsbayar/datasets'
 train_data = datasets.MNIST(root=MNIST_path, download=True, train=True, transform=T.ToTensor())
 test_data = datasets.MNIST(root=MNIST_path, download=True, train=False, transform=T.ToTensor())
 
@@ -66,31 +67,32 @@ test_data = datasets.MNIST(root=MNIST_path, download=True, train=False, transfor
 mnist_ref_train = generate_label_reference(train_data)
 mnist_ref_test = generate_label_reference(test_data)
 
+
 train_loader = DataLoader(train_data, batch_size=32, shuffle=True)
 test_loader = DataLoader(test_data, batch_size=32, shuffle=True)
 
 
+
 connection_strengths = [1, 1, 1, 1] 
 criterion = nn.CrossEntropyLoss()
-connections = [[0,1,1,0],[0,0,1,1],[0,0,0,1], [0,0,0,0]] #V1 V2 V4 IT
-connection_strengths = [[1,1,1,1],[1,1,1,1],[1,1,1,1], [1,1,1,1]]
-input_node = [0,3] # V1
+
+#connections = torch.tensor([[0, 1, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1], [0, 0, 0, 0]])
+#node_params = [(1, 28, 28, 5, 5), (10, 15, 15, 5, 5), (10, 9, 9, 3, 3), (10, 3, 3, 3, 3)]
+
+input_node = [0] # V1
 output_node = 3 #IT
-graph = Graph(connections = connections, conn_strength = connection_strengths, input_node_indices = input_node, output_node_index = output_node, signal_length = 3, dtype = torch.cuda.FloatTensor)
-model = graph.build_architecture().cuda().float()
-# model = ConvGRUExplicitTopDown((28, 28), 10, input_dim=1, 
-#                                hidden_dim=10, 
-#                                kernel_size=(3,3),
-#                                connection_strengths=connection_strengths,
-#                                num_layers=2,
-#                                reps= 2, 
-#                                topdown=True, 
-#                                topdown_type='image',
-#                                dtype = torch.FloatTensor,
-#                                return_bottom_layer=True,
-#                                batch_first = False)
-#model = ConvGRU((28, 28), 10, input_dim=1, hidden_dim=10, kernel_size=(3,3), num_layers=args['layers'], 
-#                       dtype=torch.cuda.FloatTensor, batch_first=True).cuda().float()
+input_dims = [1, 0, 0, 0]
+input_sizes = [(28, 28), (0, 0), (0, 0), (0, 0)]
+graph_loc = '/home/mila/m/mingze.li/code/convgru_feedback/sample_graph.CSV'
+graph = Graph(graph_loc, input_nodes=[0], output_node=3)
+#graph = Graph(connections = connections, 
+#              conn_strength = connection_strengths, 
+#              input_node_indices = input_node, 
+#             output_node_index = output_node,
+#              input_node_params = node_params,
+#              dtype = torch.cuda.FloatTensor)
+model = Architecture(graph, input_sizes, input_dims).cuda().float()
+
 optimizer = optim.Adam(model.parameters())
 
 def test_sequence(dataloader, clean_data, dataset_ref):
@@ -117,14 +119,15 @@ def test_sequence(dataloader, clean_data, dataset_ref):
                 
             # Generate a sequence that adds up to loaded image    
             input_seqs = sequence_gen(imgs, label, clean_data, dataset_ref, seq_style='addition').float()
-            
             # Generate random topdown
             topdown = torch.rand(imgs.shape[0], input_seqs.shape[1], args['topdown_c'], args['topdown_h'], args['topdown_w']).to(device)
+            
             input_list = []
-            input_list.append(input_seqs)
-            input_list.append(topdown)
+            imgs = torch.unsqueeze(imgs, 1)
+            input_list.append(imgs)
+            #input_list.append(topdown)
 
-
+            print(imgs.shape)
             output = model(input_list)
 
             _, predicted = torch.max(output.data, 1)
@@ -140,8 +143,6 @@ def train_sequence():
     running_loss = 0.0
         
     for i, data in enumerate(train_loader, 0):
-        if (i % 10 == 0):
-            print (i)
         optimizer.zero_grad()
             
         imgs, label = data
@@ -153,8 +154,10 @@ def train_sequence():
         topdown = torch.rand(imgs.shape[0], input_seqs.shape[1], args['topdown_c'], args['topdown_h'], args['topdown_w']).to(device)
         
         input_list = []
-        input_list.append(input_seqs)
-        input_list.append(topdown)
+        imgs = torch.unsqueeze(imgs, 1)
+        input_list.append(imgs)
+        #input_list.append(input_seqs)
+        #input_list.append(topdown)
         
         output = model(input_list)
             
@@ -188,5 +191,5 @@ for epoch in range(args['epochs']):
 
     with open(args['results_save'], "wb") as f:
         pickle.dump(losses, f)
-        
+
     torch.save(model.state_dict(), args['model_save'])
