@@ -269,30 +269,16 @@ class Architecture(nn.Module):
                         num_in_nodes += 1
                     
                     
-                    if(len(current_input_cells) < num_in_nodes):
-                        dummy_dim = [0,0,0]
+                    dummy_dim = [0,0,0]
                         
-                        for in_nodes in self.graph.nodes[node].in_nodes_indices:
-                            only_stimuli = False
-
-                            dummy_dim[0] += self.graph.nodes[in_nodes.item()].hidden_dim
-                            dummy_dim[1] += self.graph.nodes[in_nodes.item()].input_size[0]
-                            dummy_dim[2] += self.graph.nodes[in_nodes.item()].input_size[1]
-                        bottomup = torch.cat(bottomup, dim=1)
-                        if (not only_stimuli):
-                            bottomup = torch.cat((bottomup, torch.zeros((batch_size,(dummy_dim[0]*dummy_dim[1]*dummy_dim[2] - bottomup.shape[1])), device=torch.device('cuda'))), dim=1) #pads zeros
-                    else:
-                        bottomup = torch.cat(bottomup, dim=1).flatten(start_dim = 1)
-                        
-                        if (only_stimuli == False):
-                        #calculates the expected size and pads zeros
-                            dummy_dim = [0,0,0]
-                            for in_nodes in self.graph.nodes[node].in_nodes_indices:
-                                dummy_dim[0] += self.graph.nodes[in_nodes.item()].hidden_dim
-                                dummy_dim[1] += self.graph.nodes[in_nodes.item()].input_size[0]
-                                dummy_dim[2] += self.graph.nodes[in_nodes.item()].input_size[1]
-                            print(dummy_dim[0],dummy_dim[1],dummy_dim[2])
-                            bottomup = torch.cat((bottomup, torch.zeros((batch_size,(dummy_dim[0]*dummy_dim[1]*dummy_dim[2] - bottomup.shape[1])), device=torch.device('cuda'))), dim=1) #pads zeros
+                    for in_nodes in self.graph.nodes[node].in_nodes_indices:
+                        dummy_dim[0] += self.graph.nodes[in_nodes.item()].hidden_dim
+                        dummy_dim[1] += self.graph.nodes[in_nodes.item()].input_size[0]
+                        dummy_dim[2] += self.graph.nodes[in_nodes.item()].input_size[1]
+                    bottomup = torch.cat(bottomup, dim=1).flatten(start_dim = 1)
+                    if (not only_stimuli):
+                        bottomup = torch.cat((bottomup, torch.zeros((batch_size,(dummy_dim[0]*dummy_dim[1]*dummy_dim[2] - bottomup.shape[1])), device=torch.device('cuda'))), dim=1) #pads zeros
+                    
                         
                         
                                                 # if there's no new info, skip rest of loop
