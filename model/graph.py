@@ -136,6 +136,8 @@ class Architecture(nn.Module):
         self.rep = rep # repetition, i.e how many times to view the sequence in full
         self.use_dropout = dropout
         self.dropout = nn.Dropout(dropout_p)
+        self.input_sizes = input_sizes
+        self.img_channel_dims = img_channel_dims
 
         cell_list = []
         for node in range(graph.num_node):
@@ -216,8 +218,8 @@ class Architecture(nn.Module):
         """
         #find the time length of the longest input signal + enough extra time for the last input to go through all nodes
         seq_len = max([i.shape[1] for i in all_inputs])
-        process_time = seq_len + self.graph.num_node - 1
-        batch_size = all_inputs[0].shape[0]
+        process_time = seq_len + self.graph.num_node - 1 #TODO: needs to rewrite (this only works if the path from input node to output node contains all nodes in the graph)
+        batch_size = all_inputs[0].shape[0] #assumes all inputs have the same batch size
         hidden_states = self._init_hidden(batch_size=batch_size)
         hidden_states_prev = self._init_hidden(batch_size=batch_size)
         #time = seq_len * self.rep
@@ -227,11 +229,10 @@ class Architecture(nn.Module):
             
             # For each image
             for t in range(process_time):
-                print("time: ",t)
-
+                #print("t = ",t)
                 # Go through each node and see if anything should be processed
                 for node in range(self.graph.num_node):
-                    print('node:',node,":")
+                    #print("node =", node)
 
                     # input size is same for all bottomup and topdown input for ease of combining inputs
                     c = self.graph.nodes[node].input_dim
@@ -243,7 +244,8 @@ class Architecture(nn.Module):
                     bottomup_info = False
 
                     # direct stimuli if (node receives it + the sequence isn't done)
-                    if node in self.graph.input_node_indices and (t < seq_len):
+                    #TODO: current code assumes allinputs have the same time length
+                    if node in self.graph.input_node_indices and (t < seq_len): 
                         stimuli = all_inputs[self.graph.input_node_indices.index(node)]
                         #bottomup.append(stimuli[:, t, :, :, :].flatten(start_dim=1))
                         bottomup.append(stimuli[:, t, :, :, :])
@@ -255,38 +257,37 @@ class Architecture(nn.Module):
                     for i, bottomup_node in enumerate(current_input_cells):
                         bottomup.append(hidden_states_prev[bottomup_node].flatten(start_dim=1))
                         #bottomup.append(hidden_states_prev[bottomup_node])
-                        bottomup_info = True
-                        only_stimuli = False
+                        bottomup_info = True #this keeps track of whether there exists any form of bottomup information
+                        only_stimuli = False #this keeps track of whether there are only direct stimuli from inputs (rather than modulartory info from other nodes)
                         #bottomup.append(hidden_states_prev[bottomup_node]
                         #bottomup.append(hidden_states[bottomup_node])
                     
+                    #if there are no new bottomup information, then skip the rest of the look where we deal with catting all bottomup inputs
                     if bottomup_info == False:
                         continue
                         
-                    #I don't know better ways to count number of elements in in_nodes_indices
+                    #(Mingze: I don't know better ways to count number of elements in in_nodes_indices)
                     num_in_nodes = 0
                     for i in self.graph.nodes[node].in_nodes_indices:
                         num_in_nodes += 1
                     
+                    #cats all of bottomup inputs and flattens tehem
+                    bottomup = torch.cat(bottomup, dim=1).flatten(start_dim = 1)
+
+                    #if we have BOTH inputs from 1.other nodes and 2.direct stimuli, then we pad zeros such that the catted bottomup can be projected to the correct size
+                    #if (not only_stimuli):
                     
                     dummy_dim = [0,0,0]
-                        
                     for in_nodes in self.graph.nodes[node].in_nodes_indices:
                         dummy_dim[0] += self.graph.nodes[in_nodes.item()].hidden_dim
                         dummy_dim[1] += self.graph.nodes[in_nodes.item()].input_size[0]
                         dummy_dim[2] += self.graph.nodes[in_nodes.item()].input_size[1]
-                    bottomup = torch.cat(bottomup, dim=1).flatten(start_dim = 1)
-                    if (not only_stimuli):
-                        bottomup = torch.cat((bottomup, torch.zeros((batch_size,(dummy_dim[0]*dummy_dim[1]*dummy_dim[2] - bottomup.shape[1])), device=torch.device('cuda'))), dim=1) #pads zeros
-                    
-                        
-                        
-                                                # if there's no new info, skip rest of loop
-                    #if not bottomup or torch.count_nonzero(torch.cat(bottomup, dim=1)) == 0:
-                   # if bottomup.shape[1] == 0:
-                        #continue
-                    
-                    # else concatenate all inputs and project to correct size
+                    #now we take the input dim&size into account
+                    dummy_dim[0] += self.img_channel_dims[node]
+                    dummy_dim[1] += self.input_sizes[node][0]
+                    dummy_dim[2] += self.input_sizes[node][1]
+                    bottomup = torch.cat((bottomup, torch.zeros((batch_size,(dummy_dim[0]*dummy_dim[1]*dummy_dim[2] - bottomup.shape[1])), device=torch.device('cuda'))), dim=1) 
+                    #project to correct size
                     bottomup = self.bottomup_projections[node](bottomup).reshape(batch_size, c, h, w)
                     
                     ##################################
