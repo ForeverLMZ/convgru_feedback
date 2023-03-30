@@ -188,24 +188,23 @@ class Architecture(nn.Module):
         self.bottomup_projections = nn.ModuleList(bottomup_projections)
         
         
-        # PROJECTIONS FOR TOPDOWN INTERLAYER CONNECTIONS
+        # PROJECTIONS FOR TOPDOWN INTERLAYER CONNECTIONS (modulartory projections)
         topdown_gru_proj = []
         for node in range(self.graph.num_node):
             # dimensions of ALL top-down inputs to current node
-            #all_input_h = sum([conv_output_size(graph.nodes[i.item()].input_size[0], graph.nodes[i.item()].kernel_size[0]) 
-            #                   for i in self.graph.nodes[node].out_nodes_indices]) + input_sizes[node][0]
-            #all_input_w = sum([conv_output_size(graph.nodes[i.item()].input_size[1], graph.nodes[i.item()].kernel_size[1]) 
-            #                   for i in self.graph.nodes[node].out_nodes_indices]) + input_sizes[node][1]
-            
-            all_input_h = sum([graph.nodes[i.item()].input_size[0] for i in self.graph.nodes[node].out_nodes_indices])
-            all_input_w = sum([graph.nodes[i.item()].input_size[1] for i in self.graph.nodes[node].out_nodes_indices])
-            all_input_dim = sum([graph.nodes[i.item()].input_dim for i in self.graph.nodes[node].out_nodes_indices])
+            all_input_chw = 0 #initialization
+            for out_nodes in self.graph.nodes[node].out_nodes_indices:
+                single_input_chw = self.graph.nodes[out_nodes].input_size[0]*self.graph.nodes[out_nodes].input_size[1]*self.graph.nodes[out_nodes].input_dim
+                all_input_chw += single_input_chw
+            #all_input_h = sum([graph.nodes[i.item()].input_size[0] for i in self.graph.nodes[node].out_nodes_indices])
+            #all_input_w = sum([graph.nodes[i.item()].input_size[1] for i in self.graph.nodes[node].out_nodes_indices])
+            #all_input_dim = sum([graph.nodes[i.item()].input_dim for i in self.graph.nodes[node].out_nodes_indices])
             
             # dimensions accepted by current node
             target_h, target_w = graph.nodes[node].input_size
             target_c = graph.nodes[node].hidden_dim + graph.nodes[node].input_dim
             
-            proj = nn.Linear(all_input_dim*all_input_h*all_input_w, target_c*target_h*target_w)
+            proj = nn.Linear(all_input_chw, target_c*target_h*target_w)
             topdown_gru_proj.append(proj)
         self.topdown_projections = nn.ModuleList(topdown_gru_proj)
 
@@ -299,9 +298,12 @@ class Architecture(nn.Module):
                         topdown.append(hidden_states_prev[topdown_node].flatten(start_dim=1))
                         #print(topdown[0].shape)
                     
+                    #if there is no modulartory signals in place, then send a bunch of zeros as the topdown signal
                     if not topdown or torch.count_nonzero(torch.cat(topdown, dim=1)) == 0:
                         #topdown = None
                         topdown = torch.zeros((hidden_states_prev[node].shape[0], self.graph.nodes[node].input_dim + hidden_states_prev[node].shape[1], self.graph.nodes[node].input_size[0], self.graph.nodes[node].input_size[1])).to('cuda')
+                    
+                    #if there IS modulartory signals, project and reshape them to right size
                     else:
                         topdown = self.topdown_projections[node](torch.cat(topdown, dim=1))
                         topdown = topdown.reshape(batch_size, self.graph.nodes[node].input_dim + self.graph.nodes[node].hidden_dim, h, w)
