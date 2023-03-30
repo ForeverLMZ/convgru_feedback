@@ -194,7 +194,7 @@ class Architecture(nn.Module):
             # dimensions of ALL top-down inputs to current node
             all_input_chw = 0 #initialization
             for out_nodes in self.graph.nodes[node].out_nodes_indices:
-                single_input_chw = self.graph.nodes[out_nodes].input_size[0]*self.graph.nodes[out_nodes].input_size[1]*self.graph.nodes[out_nodes].input_dim
+                single_input_chw = self.graph.nodes[out_nodes].input_size[0]*self.graph.nodes[out_nodes].input_size[1]*self.graph.nodes[out_nodes].hidden_dim
                 all_input_chw += single_input_chw
             #all_input_h = sum([graph.nodes[i.item()].input_size[0] for i in self.graph.nodes[node].out_nodes_indices])
             #all_input_w = sum([graph.nodes[i.item()].input_size[1] for i in self.graph.nodes[node].out_nodes_indices])
@@ -296,7 +296,6 @@ class Architecture(nn.Module):
 
                     for i, topdown_node in enumerate(self.graph.nodes[node].out_nodes_indices):
                         topdown.append(hidden_states_prev[topdown_node].flatten(start_dim=1))
-                        #print(topdown[0].shape)
                     
                     #if there is no modulartory signals in place, then send a bunch of zeros as the topdown signal
                     if not topdown or torch.count_nonzero(torch.cat(topdown, dim=1)) == 0:
