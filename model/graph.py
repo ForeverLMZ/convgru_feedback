@@ -1,4 +1,4 @@
-rom model.topdown_gru import ConvGRUTopDownCell
+from model.topdown_gru import ConvGRUTopDownCell
 import torch
 from torch import nn
 import torch.nn.functional as F
@@ -73,8 +73,12 @@ class Graph(object):
         self.dtype = dtype
         self.bias = bias
 
-        self.visited = set() #creates an empty set called visited to keep track of the nodes that have been visited during the depth-first search (DFS) traversal of the graph
+        #creates an empty set called visited to keep track of the nodes that have been visited during the depth-first search (DFS) traversal of the graph 
+        self.visited = set() #a list of int (node indicies)
         self.longest_path_length = 0
+        self.longest_path_length = self.find_longest_path_length()
+        print(self.longest_path_length)
+        
 
     def generate_node_list(self,connections, node_dims):
         nodes = []
@@ -113,16 +117,16 @@ class Graph(object):
     def find_feedforward_cells(self, node):
         return self.nodes[node].in_nodes_indices
 
-    def find_feedback_cells(self, node, t):
+    def find_feedback_cells(self, node, t): 
         return self.nodes[node].out_nodes_indices
 
     def dfs(self, node, current_length): # depth-first search (DFS) traversal of the graph
         self.visited.add(node.index)
         current_length += 1
 
-        for out_node in node.output_nodes:
-            if out_node.index not in self.visited:
-                self.dfs(out_node, current_length)
+        for out_node_index in node.out_nodes_indices:
+            if out_node_index not in self.visited:
+                self.dfs(self.nodes[out_node_index], current_length)
 
         if current_length > self.longest_path_length:
             self.longest_path_length = current_length
@@ -177,7 +181,8 @@ class Architecture(nn.Module):
         # The "brain areas" of the model
         cell_list = []
         for node in range(graph.num_node):
-            cell_list.append(ConvGRUTopDownCell(input_size=((graph.nodes[node].input_size[0], graph.nodes[node].input_size[1])), 
+            cell_list.append(ConvGRUTopDownCell(input_size=((graph.nodes[node].input_size[0], graph.nodes[node].input_size[1])),
+                                                topdown_type = 'composite',
                                          input_dim=graph.nodes[node].input_dim, 
                                          hidden_dim = int(graph.nodes[node].hidden_dim),
                                          kernel_size=graph.nodes[node].kernel_size,
@@ -327,12 +332,15 @@ class Architecture(nn.Module):
                             bottomup.append(projs[input_num][0](inp[0][:, t, :, :, :]))
                             bottomup.append(projs[input_num][1](inp[1][:, t, :, :, :]))
                         else:
+                            #print("input shape",inp[:, t, :, :, :].shape)
                             bottomup.append(projs[input_num](inp[:, t, :, :, :]))
                         input_num += 1
                         
                     # bottom-up input from other nodes
                     for i, bottomup_node in enumerate(self.graph.nodes[node].in_nodes_indices):
+                        #print("before",hidden_states_prev[bottomup_node].shape)
                         bottomup.append(projs[input_num](hidden_states_prev[bottomup_node]))
+                        #print("after",bottomup[i].shape)
                         input_num += 1
                         
                     if not bottomup:  #only triggers after sequence has ended
