@@ -77,7 +77,6 @@ class Graph(object):
         self.visited = set() #a list of int (node indicies)
         self.longest_path_length = 0
         self.longest_path_length = self.find_longest_path_length()
-        print(self.longest_path_length)
         
 
     def generate_node_list(self,connections, node_dims):
@@ -253,8 +252,7 @@ class Architecture(nn.Module):
             per_input_projections.append(integrator_conv)
             
             self.bottomup_projections.append(nn.ModuleList(per_input_projections))
-        print(self.bottomup_projections)
-                
+            
         # PROJECTIONS FOR TOPDOWN INTERLAYER CONNECTIONS        
         for end_node in range(graph.num_node):
             # number of nodes it projects to (i.e everyone it receives feedback from)
@@ -282,7 +280,6 @@ class Architecture(nn.Module):
             self.topdown_projections.append(nn.ModuleList(per_input_projections))
             #self.topdown_projections = nn.ModuleList(self.topdown_projections)
             
-        print(self.topdown_projections)
 
     def forward(self, all_inputs, batch=True):
         """
@@ -322,7 +319,6 @@ class Architecture(nn.Module):
                     bottomup = []
                     input_num = 0                             # index of bottomup-input, used to fetch projection convs
                     projs = self.bottomup_projections[node]   # relevant bottom-up projections for this node
-                    print(node)
                     #print(self.graph.input_node_indices)
 
                     # direct stimuli if node receives it + the sequence isn't done
@@ -347,8 +343,6 @@ class Architecture(nn.Module):
                         continue
                     
                     # Concatenate all inputs and integrate
-                    for i in range(len(bottomup)):
-                        print(bottomup[i].shape)
                     bottomup = torch.cat(bottomup, dim=1)
                     bottomup = projs[-1](bottomup)
                     
@@ -390,7 +384,6 @@ class Architecture(nn.Module):
                 # flag direct input areas too if the sequence is not fully seen yet        
                 for inp_idx, seq in enumerate(all_inputs): 
                     if t + 1 < seq.shape[1]:
-                        print(seq.shape)
                         active_nodes.append(self.graph.input_node_indices[inp_idx])
                 
                 # copy hidden state
