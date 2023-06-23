@@ -140,8 +140,10 @@ class Graph(object):
         return self.longest_path_length
 
 class Architecture(nn.Module):
-    def __init__(self, graph, input_sizes, input_dims, output_size=10,
-                 topdown=True, stereo=False,
+    def __init__(self, graph, input_sizes, input_dims, 
+                 output_size=10,
+                 topdown=True, topdown_type = 'multiplicative',
+                 stereo=False,
                  dropout=True, dropout_p=0.25, rep=1,
                  proj_hidden_dim=32, device='cuda'):
         '''
@@ -151,6 +153,8 @@ class Architecture(nn.Module):
         :param output_size (int)
             size of model output
         :param topdown (bool)
+        :param topdown_type (str)
+            'multiplicative' or 'composite', how to combine top-down info within the block
         :param stereo (bool or list of bools):
             if raw inputs to one area are stereo images. NOTE: stereo images are assumed to be equal in size 
         :param dropout (bool)
@@ -180,11 +184,11 @@ class Architecture(nn.Module):
         # The "brain areas" of the model
         cell_list = []
         for node in range(graph.num_node):
-            cell_list.append(ConvGRUTopDownCell(input_size=((graph.nodes[node].input_size[0], graph.nodes[node].input_size[1])),
-                                                topdown_type = 'composite',
+            cell_list.append(ConvGRUTopDownCell(input_size=((graph.nodes[node].input_size[0], graph.nodes[node].input_size[1])), 
                                          input_dim=graph.nodes[node].input_dim, 
                                          hidden_dim = int(graph.nodes[node].hidden_dim),
-                                         kernel_size=graph.nodes[node].kernel_size,
+                                         kernel_size=graph.nodes[node].kernel_size, 
+                                         topdown_type = topdown_type,
                                          bias=graph.bias,
                                          dtype=graph.dtype))
         self.cell_list = nn.ModuleList(cell_list)
@@ -252,7 +256,8 @@ class Architecture(nn.Module):
             per_input_projections.append(integrator_conv)
             
             self.bottomup_projections.append(nn.ModuleList(per_input_projections))
-            
+        print(self.bottomup_projections)
+                
         # PROJECTIONS FOR TOPDOWN INTERLAYER CONNECTIONS        
         for end_node in range(graph.num_node):
             # number of nodes it projects to (i.e everyone it receives feedback from)
@@ -260,15 +265,25 @@ class Architecture(nn.Module):
             per_input_projections = []
             
             for start_node in self.graph.nodes[end_node].out_nodes_indices:
+                bottom_size = graph.nodes[end_node].input_size
+                top_size = graph.nodes[start_node].input_size
             
-                # calculate convolution dimensions                
-                stride = [o//i for o, i in zip(graph.nodes[end_node].input_size, graph.nodes[start_node].input_size)]
-                
-                # projection from single node
-                proj = nn.ConvTranspose2d(in_channels=graph.nodes[start_node].hidden_dim, 
-                                 out_channels=self.proj_hidden_dim,
-                                kernel_size=stride,
-                                stride=stride, device=device)
+                # upsample
+                if top_size[0]*top_size[1] < bottom_size[0]*bottom_size[1]:
+                    stride = [o//i for o, i in zip(bottom_size, top_size)]
+                    #proj = ILC_upsampler(in_channel=graph.nodes[start_node].hidden_dim,
+                    #                     out_channel=self.proj_hidden_dim,
+                    #                    stride=stride, device=device)
+                    proj = nn.ConvTranspose2d(in_channels=graph.nodes[start_node].hidden_dim,
+                                         out_channels=self.proj_hidden_dim,
+                                              kernel_size=stride, stride=stride, device=device)
+                else: # or downsample
+                    stride, padding = self.calc_stride_padding(top_size, bottom_size, 
+                                                      graph.nodes[start_node].kernel_size)
+                    proj = nn.Conv2d(in_channels=graph.nodes[start_node].hidden_dim, 
+                                     out_channels=self.proj_hidden_dim,
+                                    kernel_size=graph.nodes[end_node].kernel_size,
+                                    stride=stride, padding=padding, device=device)
                 per_input_projections.append(proj)
             
             # Final conv to integrate all inputs. This convolution does not change shape of image
@@ -280,6 +295,7 @@ class Architecture(nn.Module):
             self.topdown_projections.append(nn.ModuleList(per_input_projections))
             #self.topdown_projections = nn.ModuleList(self.topdown_projections)
             
+        print(self.topdown_projections)
 
     def forward(self, all_inputs, batch=True):
         """
@@ -290,7 +306,7 @@ class Architecture(nn.Module):
         """
         #find the time length of the longest input signal + enough extra time for the last input to go through all nodes
         seq_len = max([i[0].shape[1] if isinstance(i, list) else i.shape[1] for i in all_inputs])
-        process_time = seq_len + self.graph.num_node - 1
+        process_time = seq_len + self.graph.num_node - 2
         
         if batch==True:
             batch_size = all_inputs[0][0].shape[0] if self.stereo else all_inputs[0].shape[0]
@@ -319,6 +335,7 @@ class Architecture(nn.Module):
                     bottomup = []
                     input_num = 0                             # index of bottomup-input, used to fetch projection convs
                     projs = self.bottomup_projections[node]   # relevant bottom-up projections for this node
+                    #print(node)
                     #print(self.graph.input_node_indices)
 
                     # direct stimuli if node receives it + the sequence isn't done
@@ -328,15 +345,12 @@ class Architecture(nn.Module):
                             bottomup.append(projs[input_num][0](inp[0][:, t, :, :, :]))
                             bottomup.append(projs[input_num][1](inp[1][:, t, :, :, :]))
                         else:
-                            #print("input shape",inp[:, t, :, :, :].shape)
                             bottomup.append(projs[input_num](inp[:, t, :, :, :]))
                         input_num += 1
                         
                     # bottom-up input from other nodes
                     for i, bottomup_node in enumerate(self.graph.nodes[node].in_nodes_indices):
-                        #print("before",hidden_states_prev[bottomup_node].shape)
                         bottomup.append(projs[input_num](hidden_states_prev[bottomup_node]))
-                        #print("after",bottomup[i].shape)
                         input_num += 1
                         
                     if not bottomup:  #only triggers after sequence has ended
@@ -356,11 +370,8 @@ class Architecture(nn.Module):
 
                         for i, topdown_node in enumerate(self.graph.nodes[node].out_nodes_indices):
                             topdown.append(topdown_projs[i](hidden_states_prev[topdown_node]))
-                            #print(topdown[0].shape)
                         
                         topdown = topdown_projs[-1](torch.cat(topdown, dim=1))
-                        #print(topdown.shape)
-                        #print(topdown)
                             
                     else:  
                         topdown = None # if this is the beginning of sequence, there's no topdown info
@@ -382,8 +393,9 @@ class Architecture(nn.Module):
                         active_nodes.append(next_node.item())
                         
                 # flag direct input areas too if the sequence is not fully seen yet        
-                for inp_idx, seq in enumerate(all_inputs): 
-                    if t + 1 < seq.shape[1]:
+                for inp_idx, seq in enumerate(all_inputs):
+                    seq_shape = seq.shape[0][1] if self.stereo else seq.shape[1]
+                    if t + 1 < seq_shape:
                         active_nodes.append(self.graph.input_node_indices[inp_idx])
                 
                 # copy hidden state
