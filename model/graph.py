@@ -64,7 +64,8 @@ class Graph(object):
         self.conn = self.conn_strength > 0                                           # binary matrix of connections        
         self.node_dims = [row for _, row in graph_df.iterrows()]                     # dimensions of each node/area
         self.nodes = self.generate_node_list(self.conn, self.node_dims)              # turn dataframe into list of graph nodes
-        
+        #self.longest_path_length = self.find_longest_path()
+
         self.input_node_indices = input_nodes
         self.output_node_index = output_node
 
