@@ -1,4 +1,4 @@
-from model.topdown_gru import ConvGRUTopDownCell
+from model.topdown_gru import ConvGRUBasalTopDownCell, ILC_upsampler
 import torch
 from torch import nn
 import torch.nn.functional as F
@@ -27,7 +27,9 @@ class Node:
         
     '''
     def __init__(self, index, input_nodes, output_nodes, input_size = (28, 28),
-                 input_dim = 1, hidden_dim = 10, kernel_size = (3,3)):
+                 input_dim = 1, hidden_dim = 10, 
+                 basal_topdown_dim=0, apical_topdown_dim=0,
+                 kernel_size = (3,3)):
         
         # connectivity params
         self.index = index
@@ -40,6 +42,8 @@ class Node:
         self.input_size = input_size
         self.input_dim = input_dim
         self.hidden_dim = hidden_dim
+        self.basal_topdown_dim = basal_topdown_dim
+        self.apical_topdown_dim = apical_topdown_dim
         self.kernel_size = kernel_size
              
     def __eq__(self, other): 
@@ -65,7 +69,7 @@ class Graph(object):
         self.node_dims = [row for _, row in graph_df.iterrows()]                     # dimensions of each node/area
         self.nodes = self.generate_node_list(self.conn, self.node_dims)              # turn dataframe into list of graph nodes
         #self.longest_path_length = self.find_longest_path()
-
+        
         self.input_node_indices = input_nodes
         self.output_node_index = output_node
 
@@ -73,12 +77,12 @@ class Graph(object):
 
         self.dtype = dtype
         self.bias = bias
-
+        
         #creates an empty set called visited to keep track of the nodes that have been visited during the depth-first search (DFS) traversal of the graph 
         self.visited = set() #a list of int (node indicies)
         self.longest_path_length = 0
         self.longest_path_length = self.find_longest_path_length()
-        
+        print("longest path length is ", self.longest_path_length)
 
     def generate_node_list(self,connections, node_dims):
         nodes = []
@@ -88,6 +92,8 @@ class Graph(object):
             output_nodes = torch.nonzero(connections[n, :])
             hidden_dim = node_dims[n].hidden_dim
             input_dim = node_dims[n].input_dim
+            basal_topdown_dim=node_dims[n].basal_topdown_dim
+            apical_topdown_dim=node_dims[n].apical_topdown_dim
             input_size = (node_dims[n].input_h, node_dims[n].input_w)
             #output_size = (node_dims[n].output_h, node_dims[n].output_w)
             kernel_size = (node_dims[n].kernel_h, node_dims[n].kernel_w)
@@ -95,7 +101,8 @@ class Graph(object):
             node = Node(n, input_nodes, output_nodes, 
                         input_dim=input_dim, 
                         input_size=input_size,
-                        #output_size=input_size, 
+                        basal_topdown_dim=basal_topdown_dim, 
+                        apical_topdown_dim=apical_topdown_dim, 
                         hidden_dim=hidden_dim,
                        kernel_size=kernel_size)
             nodes.append(node)
@@ -117,9 +124,9 @@ class Graph(object):
     def find_feedforward_cells(self, node):
         return self.nodes[node].in_nodes_indices
 
-    def find_feedback_cells(self, node, t): 
+    def find_feedback_cells(self, node, t):
         return self.nodes[node].out_nodes_indices
-
+    
     def dfs(self, node, current_length): # depth-first search (DFS) traversal of the graph
         self.visited.add(node.index)
         current_length += 1
@@ -143,7 +150,7 @@ class Graph(object):
 class Architecture(nn.Module):
     def __init__(self, graph, input_sizes, input_dims, 
                  output_size=10,
-                 topdown=True, topdown_type = 'multiplicative',
+                 topdown=True,
                  stereo=False,
                  dropout=True, dropout_p=0.25, rep=1,
                  proj_hidden_dim=32, device='cuda'):
@@ -154,7 +161,7 @@ class Architecture(nn.Module):
         :param output_size (int)
             size of model output
         :param topdown (bool)
-        :param topdown_type (str)
+        :param topdown_mechanism (str)
             'multiplicative' or 'composite', how to combine top-down info within the block
         :param stereo (bool or list of bools):
             if raw inputs to one area are stereo images. NOTE: stereo images are assumed to be equal in size 
@@ -185,11 +192,12 @@ class Architecture(nn.Module):
         # The "brain areas" of the model
         cell_list = []
         for node in range(graph.num_node):
-            cell_list.append(ConvGRUTopDownCell(input_size=((graph.nodes[node].input_size[0], graph.nodes[node].input_size[1])), 
+            cell_list.append(ConvGRUBasalTopDownCell(input_size=((graph.nodes[node].input_size[0], graph.nodes[node].input_size[1])), 
                                          input_dim=graph.nodes[node].input_dim, 
                                          hidden_dim = int(graph.nodes[node].hidden_dim),
                                          kernel_size=graph.nodes[node].kernel_size, 
-                                         topdown_type = topdown_type,
+                                        basal_topdown_dim = graph.nodes[node].basal_topdown_dim,
+                                        apical_topdown_dim = graph.nodes[node].apical_topdown_dim,
                                          bias=graph.bias,
                                          dtype=graph.dtype))
         self.cell_list = nn.ModuleList(cell_list)
@@ -272,12 +280,12 @@ class Architecture(nn.Module):
                 # upsample
                 if top_size[0]*top_size[1] < bottom_size[0]*bottom_size[1]:
                     stride = [o//i for o, i in zip(bottom_size, top_size)]
-                    #proj = ILC_upsampler(in_channel=graph.nodes[start_node].hidden_dim,
-                    #                     out_channel=self.proj_hidden_dim,
-                    #                    stride=stride, device=device)
-                    proj = nn.ConvTranspose2d(in_channels=graph.nodes[start_node].hidden_dim,
-                                         out_channels=self.proj_hidden_dim,
-                                              kernel_size=stride, stride=stride, device=device)
+                    proj = ILC_upsampler(in_channel=graph.nodes[start_node].hidden_dim,
+                                         out_channel=self.proj_hidden_dim,
+                                        stride=stride, device=device)
+                    #proj = nn.ConvTranspose2d(in_channels=graph.nodes[start_node].hidden_dim,
+                    #                     out_channels=self.proj_hidden_dim,
+                    #                          kernel_size=stride, stride=stride, device=device)
                 else: # or downsample
                     stride, padding = self.calc_stride_padding(top_size, bottom_size, 
                                                       graph.nodes[start_node].kernel_size)
@@ -288,8 +296,9 @@ class Architecture(nn.Module):
                 per_input_projections.append(proj)
             
             # Final conv to integrate all inputs. This convolution does not change shape of image
+            topdown_end_dim = graph.nodes[end_node].input_dim + graph.nodes[end_node].hidden_dim + graph.nodes[end_node].basal_topdown_dim + 2*graph.nodes[end_node].apical_topdown_dim
             integrator_conv = nn.Conv2d(in_channels=self.proj_hidden_dim*num_inputs, 
-                                        out_channels=graph.nodes[end_node].input_dim + graph.nodes[end_node].hidden_dim,
+                                        out_channels= topdown_end_dim,
                                        kernel_size=3, padding=1, device=device)
             per_input_projections.append(integrator_conv)
             
@@ -307,7 +316,7 @@ class Architecture(nn.Module):
         """
         #find the time length of the longest input signal + enough extra time for the last input to go through all nodes
         seq_len = max([i[0].shape[1] if isinstance(i, list) else i.shape[1] for i in all_inputs])
-        process_time = seq_len + self.graph.num_node - 2
+        process_time = seq_len + self.graph.longest_path_length - 1 
         
         if batch==True:
             batch_size = all_inputs[0][0].shape[0] if self.stereo else all_inputs[0].shape[0]
@@ -386,6 +395,10 @@ class Architecture(nn.Module):
                         h = self.dropout(h)
                     hidden_states[node] = h
                     
+                    # flag the areas to process in next iteration
+                    #for next_node in self.graph.nodes[node].out_nodes_indices:
+                    #    active_nodes.append(next_node)
+                    
                 # flag the areas to process in next iteration
                 old_nodes = active_nodes
                 active_nodes = []
@@ -395,7 +408,7 @@ class Architecture(nn.Module):
                         
                 # flag direct input areas too if the sequence is not fully seen yet        
                 for inp_idx, seq in enumerate(all_inputs):
-                    seq_shape = seq.shape[0][1] if self.stereo else seq.shape[1]
+                    seq_shape = seq[0].shape[1] if self.stereo else seq.shape[1]
                     if t + 1 < seq_shape:
                         active_nodes.append(self.graph.input_node_indices[inp_idx])
                 
